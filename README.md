@@ -1,9 +1,11 @@
-# turning
+# zella
 Controller software for a DIY turntable, written for a teensy 3.5
 
+> You saw me spinning from the corner of your eye
+>
+> -- <cite>Zella Day</cite>
 
 ***Work in Progress***
-
 
 references
 ---
