@@ -6,27 +6,75 @@
  * for driving a stepper at the chosen rpm.
  */
 
-// Settings
-#define STEP_ANGLE 7.5 // step angle of your stepper motor
-#define LED_PIN LED_BUILTIN // LED pin
-#define DAC_PIN_A A21 // first DAC output pin
-#define DAC_PIN_B A22 // second DAC output pin
-#define ADC_PIN_FREQ A14 // analog input for controlling frequency
-#define DAC_RESOLUTION 12 // resolution of the digital-to-analog converters on your board
-#define ADC_RESOLUTION 13 // resolution of the analog-to-digital converters on your board
-#define SAMPLES_PER_CYCLE 600 // number of discreet points in the generated sine waves; higher values are smoother but more processer intensive; should be a multiple of 4
+#include <Encoder.h>
+#include <SPI.h>
+#include <Wire.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
 
-// stable data structures
-IntervalTimer timer; // timer object for the interrupt
-bool useSlider = true; // TODO make runtime configurable
-int vFreq;
-int adcBitRange = pow(2, ADC_RESOLUTION);
-float stepperRPM = 250.0; // desired rpm of the stepper shaft TODO make runtime configurable
-float sineFrequency = ((360.0 / STEP_ANGLE) * (stepperRPM / 60.0)) / 4.0; // derived frequency (hz) of the sine wave to drive stepper at the requested RPMs TODO make runtime configurable
-float interruptMicroseconds = 1000000.0 / (sineFrequency * SAMPLES_PER_CYCLE); // derived microseconds between interrupts to achieve the frequency
-uint16_t sineTable[SAMPLES_PER_CYCLE]; // array of sine wave samples
-uint32_t waveIndexA = SAMPLES_PER_CYCLE / 4; // index into the sine table for the first wave (90 degrees ahead of the second wave)
-uint32_t waveIndexB = 0; // index into the sine table for the second wave
+// Settings
+#define GEAR_RATIO            7.342       // ratio of the platter diameter to the pulley diameter
+#define STEP_ANGLE            7.5         // step angle of your stepper motor
+#define RPM_TOGGLE_LEFT       33.333      // rpm for switch in left position
+#define RPM_TOGGLE_RIGHT      45.000      // rpm for switch in right position
+#define MIN_SINE_FREQ         10.0        // minimum frequency to allow for driving stepper
+#define MAX_SINE_FREQ         100.0       // maximum frequency to allow for driving stepper
+#define LED_PIN               LED_BUILTIN // LED pin
+#define DAC_PIN_A             A21         // first DAC output pin
+#define DAC_PIN_B             A22         // second DAC output pin
+#define GAIN_POT_PIN          A14         // pin connected to gain control for stepper motor amplifier circuit // TODO am i going to use this?
+#define FREQ_TOGGLE_PIN       A15         // pin connected to frequency toggle switch
+#define ENC_SWITCH_PIN        A16         // encoder pin for toggling manual control
+#define ENC_DECREASE_PIN      A17         // encoder pin for decreasing freq
+#define ENC_INCREASE_PIN      A18         // encoder pin for increasing freq
+#define STEPPER_AMP_SDA_PIN   A3          // sda pin for controlling stepper amp gain
+#define STEPPER_AMP_SCL_PIN   A2          // scl pin for controlling stepper amp gain
+#define STEPPER_AMP_ADDRESS   0x4B        // i2c address for the stepper amp
+#define OLED_DATA             A9          // oled DATA line
+#define OLED_CLK              A8          // oled CLK line
+#define OLED_DC               A7          // oled D/C line
+#define OLED_CS               A6          // oled CS line
+#define OLED_RST              A5          // oled RST line
+#define DAC_RESOLUTION        12          // resolution of the digital-to-analog converters on your board
+#define SAMPLES_PER_CYCLE     600         // number of discreet points in the generated sine waves; higher values are smoother but more processer intensive; should be a multiple of 4
+
+Encoder encoder(ENC_DECREASE_PIN, ENC_INCREASE_PIN);                        // encoder object for reading the encoder value
+Adafruit_SSD1306 oled(OLED_DATA, OLED_CLK, OLED_DC, OLED_RST, OLED_CS);     // OLED display object for writing to the screen
+IntervalTimer timer;                                                        // timer object for the interrupt
+float freqLeft;                                                             // stepper frequency for toggle left
+float freqRight;                                                            // stepper frequency for toggle right
+int useEncoder = false;                                                     // should encoder control frequency
+bool encoderHasBeenPressed = false;                                         // whether the encoder has been toggled in this cycle (debounce)
+float sineFrequency;                                                        // derived frequency (hz) of the sine wave to drive stepper at the requested RPMs
+float interruptMicroseconds;                                                // derived microseconds between interrupts to achieve the frequency
+uint16_t sineTable[SAMPLES_PER_CYCLE];                                      // array of sine wave samples
+uint32_t waveIndexA = SAMPLES_PER_CYCLE / 4;                                // index into the sine table for the first wave (90 degrees ahead of the second wave)
+uint32_t waveIndexB = 0;                                                    // index into the sine table for the second wave
+
+float getSineFrequency(float stepperFrequency) {
+  return ((360.0 / STEP_ANGLE) * (stepperFrequency / 60.0)) / 4.0;
+}
+
+float getInterruptMicroseconds(float sineFrequency) {
+  return 1000000.0 / (sineFrequency * SAMPLES_PER_CYCLE);
+}
+
+void oledDisplayRPM(float sineFrequency) {
+  // need to derive the platter rpm from sine frequency
+  float platterRPM = 4.0 * 60.0 * STEP_ANGLE * sineFrequency / 360.0 / GEAR_RATIO;
+  oled.clearDisplay();
+  oled.setCursor(0,0);
+  oled.println(String(String(platterRPM, 2) + " rpm"));
+  oled.display();
+}
+
+void setGain(float sineFrequency) {
+  // determine optimal gain for smoothest stepper operation
+  // TODO
+  Wire.beginTransmission(STEPPER_AMP_ADDRESS);
+  Wire.write(32);
+  Wire.endTransmission();
+}
 
 // create the table of individual samples for the discreet sine waves
 void createSineTable() {
@@ -51,31 +99,73 @@ void sample() {
 }
 
 void setup() {
+  
   createSineTable();
+  
   pinMode(LED_PIN, OUTPUT);
   pinMode(DAC_PIN_A, OUTPUT);
   pinMode(DAC_PIN_B, OUTPUT);
-  pinMode(ADC_PIN_FREQ, INPUT);
+  pinMode(ENC_SWITCH_PIN, INPUT_PULLUP);
+  pinMode(FREQ_TOGGLE_PIN, INPUT);
+  
   analogWriteResolution(DAC_RESOLUTION);
-  analogReadResolution(ADC_RESOLUTION);
+
+  encoder.write(0); // initialize encoder to 0
+  freqLeft = getSineFrequency(RPM_TOGGLE_LEFT*GEAR_RATIO);
+  freqRight = getSineFrequency(RPM_TOGGLE_RIGHT*GEAR_RATIO);
+  sineFrequency = digitalRead(FREQ_TOGGLE_PIN) == LOW ? freqLeft : freqRight;
+  interruptMicroseconds = getInterruptMicroseconds(sineFrequency);
+
+  oled.begin(SSD1306_SWITCHCAPVCC);
+  oled.clearDisplay();
+  oled.setTextSize(2);
+  oled.setTextColor(WHITE);
+  oledDisplayRPM(sineFrequency);
+  
   digitalWrite(LED_PIN, HIGH);
+  
   interrupts();
   timer.begin(sample, interruptMicroseconds);
 }
 
 void loop() {
-  // if in manual mode, read in from the freq pot and update vars
-  if (useSlider) {
-    vFreq = analogRead(ADC_PIN_FREQ);
-    // scale stepper rpm based on vFreq; assuming audio taper pot
-    if (vFreq == 0) {
-      stepperRPM = 0;
-      // TODO disable interrupt
-      return;
-    }
-    stepperRPM = 500.0 * 1.0 / (1.0 - log10((float)vFreq/(float)adcBitRange));
-    sineFrequency = ((360.0 / STEP_ANGLE) * (stepperRPM / 60.0)) / 4.0;
-    interruptMicroseconds = 1000000.0 / (sineFrequency * SAMPLES_PER_CYCLE);
+  float newFreq;
+
+  // if encode is pressed, toggle using encoder and enable debouncing
+  if (!encoderHasBeenPressed && digitalRead(ENC_SWITCH_PIN) == LOW) {
+    encoderHasBeenPressed = true;
+    useEncoder = !useEncoder;
+    encoder.write(0);
+    return;
+  }
+  else if (digitalRead(ENC_SWITCH_PIN) == HIGH) {
+    encoderHasBeenPressed = false;
+  }
+  
+  // if in manual mode, read in from the encoder and update vars
+  if (useEncoder) {
+    newFreq = sineFrequency + encoder.read() / 4.0; // combine the encoder reading with the previous frequency and reset
+    encoder.write(0); // reset encoder
+  }
+  // otherwise use the chosen toggle preset
+  else {
+    newFreq = digitalRead(FREQ_TOGGLE_PIN) == LOW ? freqLeft : freqRight;
+    
+  }
+
+  // enforce reasonable sine frequency boundaries
+  if (newFreq < MIN_SINE_FREQ) {
+    newFreq = MIN_SINE_FREQ;
+  }
+  else if (newFreq > MAX_SINE_FREQ) {
+    newFreq = MAX_SINE_FREQ;
+  }
+
+  // update the interrupt and display only if necessary
+  if (newFreq != sineFrequency) {
+    sineFrequency = newFreq;
+    interruptMicroseconds = getInterruptMicroseconds(sineFrequency);
+    oledDisplayRPM(sineFrequency);
     timer.end();
     timer.begin(sample, interruptMicroseconds);
   }
