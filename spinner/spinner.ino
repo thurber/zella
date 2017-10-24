@@ -1,5 +1,5 @@
 /*
- * Teensy Sine
+ * spinner
  * 
  * Drive a bipolar stepper motor synchronously from a teensy (plus amplifier).
  * Generates two sine waves with 90 degrees of phase separation suitable
