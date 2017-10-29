@@ -18,18 +18,18 @@
 #define RPM_TOGGLE_LEFT       33.333      // rpm for switch in left position
 #define RPM_TOGGLE_RIGHT      45.000      // rpm for switch in right position
 #define MIN_SINE_FREQ         10.0        // minimum frequency to allow for driving stepper
-#define MAX_SINE_FREQ         100.0       // maximum frequency to allow for driving stepper
+#define MAX_SINE_FREQ         75.0       // maximum frequency to allow for driving stepper
 #define LED_PIN               LED_BUILTIN // LED pin
 #define DAC_PIN_A             A21         // first DAC output pin
 #define DAC_PIN_B             A22         // second DAC output pin
-#define GAIN_POT_PIN          A14         // pin connected to gain control for stepper motor amplifier circuit // TODO am i going to use this?
-#define FREQ_TOGGLE_PIN       A15         // pin connected to frequency toggle switch
-#define ENC_SWITCH_PIN        A16         // encoder pin for toggling manual control
-#define ENC_DECREASE_PIN      A17         // encoder pin for decreasing freq
-#define ENC_INCREASE_PIN      A18         // encoder pin for increasing freq
-#define STEPPER_AMP_SDA_PIN   A3          // sda pin for controlling stepper amp gain
-#define STEPPER_AMP_SCL_PIN   A2          // scl pin for controlling stepper amp gain
+#define FREQ_TOGGLE_PIN       A14         // pin connected to frequency toggle switch
+#define ENC_SWITCH_PIN        A15         // encoder pin for toggling manual control
+#define ENC_DECREASE_PIN      A16         // encoder pin for decreasing freq
+#define ENC_INCREASE_PIN      A17         // encoder pin for increasing freq
+#define STEPPER_AMP_SCL_PIN   A18         // scl pin for controlling stepper amp gain
+#define STEPPER_AMP_SDA_PIN   A19         // sda pin for controlling stepper amp gain
 #define STEPPER_AMP_ADDRESS   0x4B        // i2c address for the stepper amp
+#define STEPPER_AMP_RES       64          // bit resolution of the stepper amp gain control
 #define OLED_DATA             A9          // oled DATA line
 #define OLED_CLK              A8          // oled CLK line
 #define OLED_DC               A7          // oled D/C line
@@ -70,9 +70,10 @@ void oledDisplayRPM(float sineFrequency) {
 
 void setGain(float sineFrequency) {
   // determine optimal gain for smoothest stepper operation
-  // TODO
+  // for now let's just assume our max frequency needs max gain, and vary linearly
+  int8_t gain = (int8_t) ((STEPPER_AMP_RES-1) * sineFrequency / MAX_SINE_FREQ);
   Wire.beginTransmission(STEPPER_AMP_ADDRESS);
-  Wire.write(32);
+  Wire.write(gain);
   Wire.endTransmission();
 }
 
@@ -107,6 +108,10 @@ void setup() {
   pinMode(DAC_PIN_B, OUTPUT);
   pinMode(ENC_SWITCH_PIN, INPUT_PULLUP);
   pinMode(FREQ_TOGGLE_PIN, INPUT);
+
+  Wire.setSDA(STEPPER_AMP_SDA_PIN);
+  Wire.setSCL(STEPPER_AMP_SCL_PIN);
+  Wire.begin();
   
   analogWriteResolution(DAC_RESOLUTION);
 
@@ -115,6 +120,8 @@ void setup() {
   freqRight = getSineFrequency(RPM_TOGGLE_RIGHT*GEAR_RATIO);
   sineFrequency = digitalRead(FREQ_TOGGLE_PIN) == LOW ? freqLeft : freqRight;
   interruptMicroseconds = getInterruptMicroseconds(sineFrequency);
+
+  setGain(sineFrequency);
 
   oled.begin(SSD1306_SWITCHCAPVCC);
   oled.clearDisplay();
@@ -165,6 +172,7 @@ void loop() {
   if (newFreq != sineFrequency) {
     sineFrequency = newFreq;
     interruptMicroseconds = getInterruptMicroseconds(sineFrequency);
+    setGain(sineFrequency);
     oledDisplayRPM(sineFrequency);
     timer.end();
     timer.begin(sample, interruptMicroseconds);
