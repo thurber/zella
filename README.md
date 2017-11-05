@@ -7,6 +7,10 @@ Controller software for a DIY turntable, written for a teensy 3.5
 
 ***Work in Progress***
 
+wiring
+---
+![wiring diagram](zella.png)
+
 references
 ---
 - Teensy Pinouts - https://www.pjrc.com/teensy/pinout.html
