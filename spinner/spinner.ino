@@ -13,7 +13,7 @@
 #include <Adafruit_SSD1306.h>
 
 // Settings
-#define GEAR_RATIO            7.342       // ratio of the platter diameter to the pulley diameter
+#define GEAR_RATIO            5.625       // ratio of the platter diameter to the pulley diameter
 #define STEP_ANGLE            7.5         // step angle of your stepper motor
 #define RPM_TOGGLE_LEFT       33.333      // rpm for switch in left position
 #define RPM_TOGGLE_RIGHT      45.000      // rpm for switch in right position
